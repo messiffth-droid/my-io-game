@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Custom Map .io Game - Vietnam</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: #111;
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 30px rgba(0,0,0,0.8);
+            border: 4px solid #333;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            background: #78a75a; /* Màu cỏ đặc trưng của map .io */
+        }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 10px 15px;
+            border-radius: 6px;
+            font-size: 14px;
+            pointer-events: none;
+        }
+        #leaderboard {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px 15px;
+            border-radius: 6px;
+            width: 180px;
+            pointer-events: none;
+        }
+        #leaderboard h3 {
+            font-size: 13px;
+            border-bottom: 1px solid #555;
+            padding-bottom: 4px;
+            margin-bottom: 6px;
+            color: #ffcc00;
+        }
+        .lb-item {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            margin-bottom: 3px;
+        }
+        #controls-hint {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.6);
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            color: #aaa;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas" width="900" height="600"></canvas>
+    
+    <div id="ui">
+        <div><strong>Score:</strong> <span id="scoreVal">0</span></div>
+        <div><strong>Level:</strong> <span id="levelVal">1</span></div>
+    </div>
+
+    <div id="leaderboard">
+        <h3>BẢNG XẾP HẠNG</h3>
+        <div class="lb-item"><span>1. Đình Dũng (VN)</span><span id="lbScore">0</span></div>
+        <div class="lb-item"><span>2. Bot Pro .io</span><span>1520</span></div>
+        <div class="lb-item"><span>3. ZumiGaming</span><span>850</span></div>
+    </div>
+
+    <div id="controls-hint">
+        Dùng phím <strong>W, A, S, D</strong> hoặc <strong>Phím mũi tên</strong> để di chuyển. Giữ <strong>Chuột trái</strong> để tấn công/farm.
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+
+    // Người chơi
+    let player = {
+        x: 450,
+        y: 300,
+        radius: 18,
+        speed: 3.5,
+        color: "#f1c40f",
+        score: 0,
+        level: 1,
+        angle: 0,
+        isAttacking: false
+    };
+
+    // Phím bấm
+    let keys = {};
+    window.addEventListener("keydown", (e) => keys[e.key.toLowerCase()] = true);
+    window.addEventListener("keyup", (e) => keys[e.key.toLowerCase()] = false);
+
+    let mouse = { x: 0, y: 0, down: false };
+    canvas.addEventListener("mousemove", (e) => {
+        let rect = canvas.getBoundingClientRect();
+        mouse.x = e.clientX - rect.left;
+        mouse.y = e.clientY - rect.top;
+    });
+    canvas.addEventListener("mousedown", () => mouse.down = true);
+    canvas.addEventListener("mouseup", () => mouse.down = false);
+
+    // Bản đồ (Map Custom kiểu .io)
+    // Các vật cản (walls), khu vực dung nham (lava), cây cối để farm (trees)
+    let walls = [
+        { x: 100, y: 100, w: 200, h: 40, color: "#34495e" },
+        { x: 100, y: 140, w: 40, h: 200, color: "#34495e" },
+        { x: 600, y: 100, w: 200, h: 40, color: "#8e44ad" }, // Khu PvP
+        { x: 600, y: 140, w: 40, h: 200, color: "#8e44ad" },
+        { x: 350, y: 450, w: 200, h: 40, color: "#d35400" }  // Khu chữ P-L-A-Y
+    ];
+
+    let lavas = [
+        { x: 700, y: 450, w: 150, h: 100 }
+    ];
+
+    // Cây cối / Mục tiêu để farm điểm
+    let trees = [];
+    function spawnTrees() {
+        trees = [];
+        for (let i = 0; i < 12; i++) {
+            trees.push({
+                x: Math.random() * 1600 + 100,
+                y: Math.random() * 1200 + 100,
+                radius: 25,
+                hp: 3
+            });
+        }
+    }
+    spawnTrees();
+
+    // Camera chạy theo nhân vật
+    let camera = { x: 0, y: 0 };
+
+    function update() {
+        // Di chuyển nhân vật
+        let dx = 0, dy = 0;
+        if (keys['w'] || keys['arrowup']) dy -= 1;
+        if (keys['s'] || keys['arrowdown']) dy += 1;
+        if (keys['a'] || keys['arrowleft']) dx -= 1;
+        if (keys['d'] || keys['arrowright']) dx += 1;
+
+        if (dx !== 0 && dy !== 0) {
+            dx *= 0.7071;
+            dy *= 0.7071;
+        }
+
+        player.x += dx * player.speed;
+        player.y += dy * player.speed;
+
+        // Giới hạn biên bản đồ rộng (2000x1500)
+        player.x = Math.max(20, Math.min(1980, player.x));
+        player.y = Math.max(20, Math.min(1480, player.y));
+
+        // Góc xoay hướng chuột
+        player.angle = Math.atan2(mouse.y - (canvas.height / 2), mouse.x - (canvas.width / 2));
+
+        // Xử lý tấn công / farm cây
+        player.isAttacking = mouse.down;
+        if (player.isAttacking) {
+            trees.forEach((tree, index) => {
+                let dist = Math.hypot(player.x - tree.x, player.y - tree.y);
+                if (dist < player.radius + tree.radius + 20) {
+                    tree.hp -= 0.1;
+                    if (tree.hp <= 0) {
+                        player.score += 50;
+                        player.level = Math.floor(player.score / 200) + 1;
+                        trees.splice(index, 1);
+                        // Hồi lại cây mới sau khi phá hủy
+                        setTimeout(() => {
+                            trees.push({
+                                x: Math.random() * 1800 + 100,
+                                y: Math.random() * 1300 + 100,
+                                radius: 25,
+                                hp: 3
+                            });
+                        }, 3000);
+                    }
+                }
+            });
+        }
+
+        // Cập nhật Camera mượt mà theo người chơi
+        camera.x = player.x - canvas.width / 2;
+        camera.y = player.y - canvas.height / 2;
+
+        // Cập nhật UI hiển thị
+        document.getElementById("scoreVal").innerText = player.score;
+        document.getElementById("levelVal").innerText = player.level;
+        document.getElementById("lbScore").innerText = player.score;
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        ctx.save();
+        ctx.translate(-camera.x, -camera.y);
+
+        // 1. Vẽ nền cỏ bản đồ rộng
+        ctx.fillStyle = "#78a75a";
+        ctx.fillRect(0, 0, 2000, 1500);
+
+        // Vẽ lưới bản đồ cho sinh động
+        ctx.strokeStyle = "rgba(0,0,0,0.05)";
+        ctx.lineWidth = 1;
+        for (let x = 0; x < 2000; x += 50) {
+            ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 1500); ctx.stroke();
+        }
+        for (let y = 0; y < 1500; y += 50) {
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(2000, y); ctx.stroke();
+        }
+
+        // 2. Vẽ khu vực Dung Nam (Lava)
+        lavas.forEach(l => {
+            ctx.fillStyle = "#e74c3c";
+            ctx.fillRect(l.x, l.y, l.w, l.h);
+            ctx.fillStyle = "#f39c12";
+            ctx.font = "bold 14px sans-serif";
+            ctx.fillText("LAVA 🔥", l.x + 40, l.y + 55);
+        });
+
+        // 3. Vẽ Tường / Chướng ngại vật (Map Custom)
+        walls.forEach(w => {
+            ctx.fillStyle = w.color;
+            ctx.fillRect(w.x, w.y, w.w, w.h);
+            ctx.strokeStyle = "#222";
+            ctx.lineWidth = 3;
+            ctx.strokeRect(w.x, w.y, w.w, w.h);
+        });
+
+        // Vẽ chữ PLAY trang trí trên bản đồ giống video mẫu
+        ctx.fillStyle = "rgba(255,255,255,0.2)";
+        ctx.font = "bold 100px sans-serif";
+        ctx.fillText("VIETNAM .IO MAP", 300, 300);
+
+        // 4. Vẽ Cây cối / Mục tiêu farm
+        trees.forEach(tree => {
+            ctx.fillStyle = "#27ae60";
+            ctx.beginPath();
+            ctx.arc(tree.x, tree.y, tree.radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = "#1e8449";
+            ctx.lineWidth = 4;
+            ctx.stroke();
+
+            // Thanh HP của cây
+            ctx.fillStyle = "#333";
+            ctx.fillRect(tree.x - 20, tree.y - tree.radius - 12, 40, 6);
+            ctx.fillStyle = "#2ecc71";
+            ctx.fillRect(tree.x - 20, tree.y - tree.radius - 12, (tree.hp / 3) * 40, 6);
+        });
+
+        // 5. Vẽ Người chơi
+        ctx.save();
+        ctx.translate(player.x, player.y);
+        ctx.rotate(player.angle);
+
+        // Vẽ vũ khí (Kiếm/Gậy chém) khi tấn công
+        if (player.isAttacking) {
+            ctx.strokeStyle = "#3498db";
+            ctx.lineWidth = 8;
+            ctx.lineCap = "round";
+            ctx.beginPath();
+            ctx.arc(0, 0, player.radius + 18, -Math.PI/3, Math.PI/3);
+            ctx.stroke();
+        }
+
+        // Thân nhân vật
+        ctx.fillStyle = player.color;
+        ctx.beginPath();
+        ctx.arc(0, 0, player.radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#b7950b";
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
+        // Mắt nhân vật
+        ctx.fillStyle = "#000";
+        ctx.beginPath();
+        ctx.arc(8, -5, 3, 0, Math.PI * 2);
+        ctx.arc(8, 5, 3, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+
+        // Tên người chơi trên đầu
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 12px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("Đình Dũng (VN) [Lv." + player.level + "]", player.x, player.y - player.radius - 8);
+
+        ctx.restore();
+    }
+
+    function loop() {
+        update();
+        draw();
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+</script>
+
+</body>
+</html>
